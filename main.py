@@ -2,7 +2,7 @@ import pygame
 import numpy as np
 import cpu
 
-ins = [0x00, 0x10, 0x20, 0x40]
+ins = [0x70]
 
 def main():
 
@@ -17,9 +17,7 @@ def main():
     screen = pygame.display.set_mode((512,448))	# orig size is 256 / 224
     surface = pygame.Surface((256, 224))
     pa = pygame.PixelArray(surface)
-    for f in range(256):
-    	for g in range(224):
-    		pa[f][g] = (255, 0, 255)
+    pa = cpu.getVRAM()
     del pa
     surface = pygame.transform.scale(surface, (512, 448))
     screen.blit(surface, (0,0))
@@ -42,7 +40,6 @@ def main():
 # (if you import this as a module then nothing is executed)
 if __name__=="__main__":
 	# call the main function
-	#main()
+	main()
 	for el in ins:
-		print("hi")
 		cpu.cpu_8080[el]()
