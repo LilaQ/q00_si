@@ -1,10 +1,19 @@
 import numpy as np
 
+#	vars
 INTERRUPTS_ENABLED = False
 SP = np.uint16(0x0000)
-PC = np.uint16(0x0100)
+PC = np.uint16(0x0000)
+shiftReg = np.uint16(0x0000)
+shiftOff = 0
+memory = [0] * 0x10000
 
-memory = [0] * 0x3ffff
+#	keys
+L = 0
+R = 0
+F = 0
+C = 0
+ST = 0
 
 def loadToMem(f, dest):
 	with open(f, "rb") as f:
@@ -33,7 +42,7 @@ def loadSI():
 	loadToMem("invaders.e", 0x1800)
 
 def getVRAM():
-	return memory[0x2400:]
+	return memory[0x2400:0x4000]
 
 def getPC():
 	global PC
@@ -51,6 +60,14 @@ def getFLAGS():
 	global FLAGS
 	return FLAGS
 
+def setKeys(_L, _R, _F, _C, _ST):
+	global L, R, F, C, ST
+	L = _L
+	R = _R
+	F = _F
+	C = _C
+	ST = _ST
+
 class FLAGS:
 	S = False
 	Z = False
@@ -67,6 +84,11 @@ class REGS:
 	E = np.uint8(0x00)
 	H = np.uint8(0x00)
 	L = np.uint8(0x00)
+
+def interrupt(adr):
+	global PC
+	pushToStack(PC)
+	PC = adr
 
 def M():
 	return memory[REGS.H<<8|REGS.L]
@@ -175,7 +197,7 @@ def ANA(src, len=4):
 	global PC
 	FLAGS.C = False
 	FLAGS.A = ((REGS.A | src) >> 3) & 1
-	REGS.A = REGS.A & src
+	REGS.A = (REGS.A & src) & 0xff
 	FLAGS.P = str(bin(REGS.A)).count("1") % 2 == 0
 	FLAGS.Z = REGS.A == 0
 	FLAGS.S = REGS.A >> 7
@@ -186,7 +208,7 @@ def XRA(src, len=4):
 	global PC
 	FLAGS.C = False
 	FLAGS.A = False
-	REGS.A = REGS.A ^ src
+	REGS.A = (REGS.A ^ src) & 0xff
 	FLAGS.P = str(bin(REGS.A)).count("1") % 2 == 0
 	FLAGS.Z = REGS.A == 0
 	FLAGS.S = REGS.A >> 7
@@ -197,7 +219,7 @@ def ORA(src, len=4):
 	global PC
 	FLAGS.C = False
 	FLAGS.A = False
-	REGS.A = REGS.A | src
+	REGS.A = (REGS.A | src) & 0xff
 	FLAGS.P = str(bin(REGS.A)).count("1") % 2 == 0
 	FLAGS.Z = REGS.A == 0
 	FLAGS.S = REGS.A >> 7
@@ -206,10 +228,10 @@ def ORA(src, len=4):
 
 def CMP(src, len=4):
 	global PC
-	FLAGS.C = False
+	FLAGS.C = REGS.A < src
 	FLAGS.A = (REGS.A & 0xF) >= (src & 0xF)
 	tmp = REGS.A
-	REGS.A = REGS.A - src
+	REGS.A = (REGS.A - src) & 0xff
 	FLAGS.P = str(bin(REGS.A)).count("1") % 2 == 0
 	FLAGS.Z = REGS.A == 0
 	FLAGS.S = REGS.A >> 7
@@ -219,7 +241,7 @@ def CMP(src, len=4):
 
 def LDAX(src_hi, src_lo, len=7, size=1):
 	global PC
-	REGS.A = memory[(src_hi << 8) | src_lo]
+	REGS.A = (memory[(src_hi << 8) | src_lo]) & 0xff
 	PC = PC + size
 	return len
 
@@ -625,57 +647,66 @@ def CPI(len=7):
 	return len
 
 def EI(len=4):
+	global PC
 	INTERRUPTS_ENABLED = True
+	PC = PC + 1
 	return len
 
 def DI(len=4):
+	global PC
 	INTERRUPTS_ENABLED = False
+	PC = PC + 1
 	return len
 
+#	send Akku to output device #xy
 def OUT(len=10):
-	#	send Akku to output device #xy
-	#	xy = memory[PC+1]
-	global PC
+	global PC, shiftReg, shiftOff
+	val = REGS.A
+	if memory[PC+1] == 2:	
+		shiftOff = val & 7
+	elif memory[PC+1] == 4:
+		shiftReg = (shiftReg >> 8) | (val << 8)
+		#print("pushing to OUT device " + str(memory[PC+1]) + " with value " + "{:02X}".format(REGS.A))
 	PC = PC + 2
 	return len
 
+#	read 8bit from input device XY to Akku
 def IN(len=10):
-	#	read 8bit from input device XY to Akku
-	#	xy = memory[PC+1]
-	global PC
-
+	global PC, L, R, F, C, S, shiftReg, shiftOff
 	id = memory[PC+1]
 	if id == 0:
-		b0 = 0	#	DIP4 self-test
+		b0 = 1	#	DIP4 self-test
 		b1 = 1	#	always 1
 		b2 = 1	#	always 1
 		b3 = 1	#	always 1
-		b4 = 7	#	Fire
-		b5 = 7	#	Left
-		b6 = 7	#	Right
+		b4 = F	#	Fire
+		b5 = L	#	Left
+		b6 = R	#	Right
 		b7 = 0	#	? tied to demux port 7 ?
 		REGS.A = (b7 << 7) | (b6 << 6) | (b5 << 5) | (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | b0
 	elif id == 1:
-		b0 = 7	#	CREDIT
-		b1 = 7	#	2P Start
-		b2 = 7	#	1P Start
+		b0 = C	#	CREDIT
+		b1 = 0	#	2P Start
+		b2 = ST	#	1P Start
 		b3 = 1	#	always 1
-		b4 = 7	#	1P Shot
-		b5 = 7	#	1P left
-		b6 = 7	#	1P right
+		b4 = F	#	1P Shot
+		b5 = L	#	1P left
+		b6 = R	#	1P right
 		b7 = 0	#	not connected
 		REGS.A = (b7 << 7) | (b6 << 6) | (b5 << 5) | (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | b0
 	elif id == 2:
-		b0 = 0	#	DIP3 	00 = 3 ships	10 = 5 ships
-		b1 = 0	#	DIP5	01 = 4 ships	11 = 6 ships
+		b0 = 1	#	DIP3 	00 = 3 ships	10 = 5 ships
+		b1 = 1	#	DIP5	01 = 4 ships	11 = 6 ships
 		b2 = 0	#	Tilt
 		b3 = 0	#	DIP6	0 = extra ship at 1500	1 = extra ship at 1000
-		b4 = 7	#	2P Shot
-		b5 = 7	#	2P left
-		b6 = 7	#	2P right
+		b4 = 0	#	2P Shot
+		b5 = 0	#	2P left
+		b6 = 0	#	2P right
 		b7 = 0	#	DIP7	Coin info displayed in demo screen	0 = ON
 		REGS.A = (b7 << 7) | (b6 << 6) | (b5 << 5) | (b4 << 4) | (b3 << 3) | (b2 << 2) | (b1 << 1) | b0
-
+	elif id == 3:
+		REGS.A = shiftReg >> (8 - shiftOff)
+	REGS.A = REGS.A & 0xff
 	PC = PC + 2
 	return len
 
